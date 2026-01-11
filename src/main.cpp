@@ -23,7 +23,7 @@
 #define LONG_PRESS_TIME   700
 #define VERY_LONG_PRESS   3000
 #define LOCK_TIME         250
-#define VOL_REPEAT_TIME   120
+#define VOL_REPEAT_TIME   220   // slower, smoother volume ramp
 
 /* ================= OLED ================= */
 #define SCREEN_WIDTH 128
@@ -45,6 +45,7 @@ int currentTrack = 0;
 bool playLast=false, nextLast=false, prevLast=false;
 bool isPaused = true;
 bool sleeping = false;
+bool wasRunning = false;
 
 unsigned long playPressTime = 0;
 unsigned long nextPressTime = 0;
@@ -59,8 +60,9 @@ unsigned long lastUI = 0;
 int waveShift = 0;
 bool showVolumeUI = false;
 
-/* beat smoothing (RENAMED) */
-float beatBars[10] = {0};
+/* album-art bar smoothing */
+#define ART_BARS 5
+float artBars[ART_BARS] = {0};
 
 /* scroll */
 int scrollX = 0;
@@ -71,7 +73,7 @@ void scanMusic();
 void playCurrent(bool restart = false);
 void handleButtons();
 void drawIdle();
-void drawBars();
+void drawAlbumArtBars();
 void drawVolumeUI();
 
 /* ================= SETUP ================= */
@@ -107,13 +109,22 @@ void loop() {
   if (!sleeping) audio.loop();
   handleButtons();
 
+  bool running = audio.isRunning();
+
+  /* ---- AUTO NEXT ---- */
+  if (wasRunning && !running && !isPaused && !sleeping) {
+    currentTrack = (currentTrack + 1) % totalTracks;
+    playCurrent(true);
+  }
+  wasRunning = running;
+
   if (millis() - lastUI > 120 && !sleeping) {
     lastUI = millis();
 
     if (showVolumeUI)
       drawVolumeUI();
-    else if (audio.isRunning() && !isPaused)
-      drawBars();
+    else if (running && !isPaused)
+      drawAlbumArtBars();
     else
       drawIdle();
   }
@@ -155,7 +166,7 @@ void handleButtons() {
   bool n = digitalRead(BTN_NEXT);
   bool r = digitalRead(BTN_PREV);
 
-  // PLAY
+  /* PLAY */
   if (p && !playLast) playPressTime = now;
   if (!p && playLast && now-lastAction>LOCK_TIME) {
     if (now-playPressTime > VERY_LONG_PRESS && isPaused) {
@@ -173,7 +184,7 @@ void handleButtons() {
   }
   playLast = p;
 
-  // NEXT (VOL DOWN)
+  /* NEXT (VOL DOWN) */
   if (n && !nextLast) nextPressTime = now;
   if (n && now-nextPressTime>LONG_PRESS_TIME && now-lastVolStep>VOL_REPEAT_TIME) {
     volume = max(0, volume-1);
@@ -192,7 +203,7 @@ void handleButtons() {
   }
   nextLast = n;
 
-  // PREV (VOL UP)
+  /* PREV (VOL UP) */
   if (r && !prevLast) prevPressTime = now;
   if (r && now-prevPressTime>LONG_PRESS_TIME && now-lastVolStep>VOL_REPEAT_TIME) {
     volume = min(21, volume+1);
@@ -226,29 +237,47 @@ void drawIdle() {
   waveShift+=4;
 }
 
-void drawBars() {
+/* ===== ALBUM-ART STYLE BARS ===== */
+void drawAlbumArtBars() {
   display.clearDisplay();
 
-  for (int i=0;i<10;i++) {
-    float target = random(6,40);
-    beatBars[i] = beatBars[i]*0.7 + target*0.3;
-    int h = beatBars[i];
-    int x = 6+i*12;
-    int y = 46-h;
-    display.fillRect(x,y,8,h,SSD1306_WHITE);
-    display.fillCircle(x+4,y-2,2,SSD1306_WHITE);
+  int centerX = SCREEN_WIDTH / 2;
+  int baseY   = 42;
+  int barW    = 12;
+  int gap     = 6;
+
+  for (int i = 0; i < ART_BARS; i++) {
+    float target = random(10, 34);
+    artBars[i] = artBars[i]*0.75 + target*0.25;
+
+    int h = artBars[i];
+    int xL = centerX - (i+1)*(barW+gap);
+    int xR = centerX + i*(barW+gap);
+
+    display.fillRoundRect(xL, baseY-h, barW, h, 4, SSD1306_WHITE);
+    display.fillRoundRect(xR, baseY-h, barW, h, 4, SSD1306_WHITE);
   }
 
+  /* ---- Song name ---- */
   String name = tracks[currentTrack];
-  name.remove(0,name.lastIndexOf("/")+1);
-  if (millis()-lastScroll>200) {
-    scrollX++;
-    if (scrollX > name.length()*6) scrollX=0;
-    lastScroll=millis();
-  }
-  display.setCursor(-scrollX,52);
-  display.print(name);
+  name.remove(0, name.lastIndexOf("/") + 1);
 
+  int textWidth = name.length() * 6;
+  int y = 52;
+
+  if (textWidth > SCREEN_WIDTH) {
+    if (millis() - lastScroll > 200) {
+      scrollX++;
+      if (scrollX > textWidth) scrollX = 0;
+      lastScroll = millis();
+    }
+    display.setCursor(-scrollX, y);
+  } else {
+    scrollX = 0;
+    display.setCursor((SCREEN_WIDTH-textWidth)/2, y);
+  }
+
+  display.print(name);
   display.display();
 }
 
